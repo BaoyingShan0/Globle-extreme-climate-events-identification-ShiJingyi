@@ -1,0 +1,71 @@
+import os
+import xarray as xr
+import pandas as pd
+
+# 20241120：检查数据用，代码功能：指定经纬度及日期，输出该日24小时的降水量及累计降水量（mm），计算逻辑与尺度转换代码相同
+
+# 加载 NetCDF 数据集（替换路径）
+file_path = r"F:\dataset_drought\241121_dailydataset\totalpre_202307_hourly.nc" 
+ds = xr.open_dataset(file_path)
+
+# 提取坐标和时间
+latitude = ds['latitude'].values
+longitude = ds['longitude'].values
+time = pd.to_datetime(ds['time'].values)  
+
+# 提示用户输入变量
+print("可用纬度范围:", latitude.min(), "到", latitude.max())
+print("可用经度范围:", longitude.min(), "到", longitude.max())
+print("数据分辨率为: 0.25°")
+print(f"可用日期范围: {time.min().strftime('%Y-%m-%d')} 到 {time.max().strftime('%Y-%m-%d')}")
+print("")
+
+# 用户输入经纬度和日期
+target_lat = float(input("请输入目标纬度："))
+target_lon = float(input("请输入目标经度："))
+target_date = input("请输入目标日期（YYYY-MM-DD）：")
+
+# 使用 xarray 的 sel 方法找到最近的经纬度
+selected_precip = ds['tp'].sel(
+    latitude=target_lat, longitude=target_lon, method="nearest"
+)
+
+# 获取选择的实际经纬度值
+selected_lat = selected_precip.latitude.item()
+selected_lon = selected_precip.longitude.item()
+
+# 筛选指定日期和时间范围的数据
+valid_times = pd.to_datetime(ds['time'].values)
+target_date_start = pd.Timestamp(target_date + " 01:00:00")
+target_date_end = pd.Timestamp(target_date + " 23:00:00")
+next_date_00 = target_date_end + pd.Timedelta(hours=1)
+
+date_filter = (valid_times >= target_date_start) & (valid_times <= target_date_end) | (valid_times == next_date_00)
+filtered_precip = selected_precip[date_filter].values  # 保留原始精度
+
+# 将累积降水量转换为毫米，并计算总和
+hourly_precip_mm = filtered_precip * 1000  # 原始单位假设为米
+daily_precip_mm = round(hourly_precip_mm.sum(), 6)  # 保留6位小数
+
+# 打印结果
+print(f"\n=== {target_date} {selected_lat}, {selected_lon} 降水数据 ===")
+print("小时降水量数据（单位：mm）：")
+for i, value in enumerate(hourly_precip_mm):
+    time = valid_times[date_filter][i]
+    print(f"{time}: {value} mm")
+
+print(f"\n{target_date} 累计全天降水量：{daily_precip_mm} mm")
+
+# 设置 Excel 文件保存路径
+output_dir = os.path.dirname(file_path)  # 读取文件所在的文件夹
+output_file = os.path.join(output_dir, "selected_precipitation.xlsx")
+
+# 保存到 Excel 文件
+df = pd.DataFrame({
+    "时间": valid_times[date_filter],
+    "小时降水量 (mm)": hourly_precip_mm
+})
+df.loc[len(df)] = ["累计降水量", daily_precip_mm]
+df.to_excel(output_file, index=False)
+
+print(f"\n结果已保存到 {output_file}")
